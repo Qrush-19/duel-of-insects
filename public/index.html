@@ -325,7 +325,7 @@ canvas{display:block;box-shadow:0 0 80px rgba(0,0,0,.8);}
   <!-- 결과 -->
   <div class="overlay hidden" id="result-screen">
     <div class="sub" id="result-winner"></div>
-    <h1 style="font-size:30px">WINS!</h1>
+    <h1 style="font-size:30px">WIN!</h1>
     <button class="btn" onclick="requestRematch()">REMATCH</button>
     <button class="btn" style="opacity:.5;font-size:9px;" onclick="showMenu()" data-i18n="menu">← 메뉴</button>
   </div>
@@ -578,8 +578,23 @@ function updateKeyViewer(){
   for(const [id, active] of Object.entries(map)){
     document.getElementById(id).classList.toggle('active', !!active);
   }
-  // D키 쿨타임 표시
+  // ↑키: 벌 비행 쿨타임 표시
   const myMantis = myRole==='guest' ? p2 : p1;
+  const upKey = document.getElementById('kv-up');
+  if(myMantis && myMantis.charType==='bee'){
+    if(myMantis.flying){
+      upKey.textContent='🦋';
+    } else if((myMantis.flightCooldown||0)>0){
+      upKey.classList.add('cooldown');
+      upKey.textContent=Math.ceil(myMantis.flightCooldown);
+    } else {
+      upKey.classList.remove('cooldown');
+      upKey.textContent='↑';
+    }
+  } else {
+    upKey.classList.remove('cooldown');
+    upKey.textContent='↑';
+  }
   const dKey = document.getElementById('kv-d');
   if(myMantis && myMantis.specialCooldown>0){
     dKey.classList.add('cooldown');
@@ -838,7 +853,7 @@ function drawMantis(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
 // ════════════════════════════════════════════════════
 //  벌 그리기
 // ════════════════════════════════════════════════════
-function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
+function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false,divingStinger=false){
   ctx.save();
   ctx.translate(x,y);
   ctx.scale(facing,1);
@@ -847,6 +862,9 @@ function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
   const attackState=state==='weak'||state==='strong'||state==='special';
 
   if(hp<=0){ctx.rotate(Math.PI/2);ctx.translate(0,-20);}
+
+  // 침 찌르기 돌진 시: 몸 전체를 앞쪽 아래로 기울임 (scale 이후이므로 facing 곱하지 않음)
+  if(divingStinger) ctx.rotate(Math.PI*0.35);
 
   // 그림자
   ctx.save();ctx.scale(1,.15);ctx.beginPath();ctx.ellipse(0,0,22,10,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.3)';ctx.fill();ctx.restore();
@@ -861,15 +879,15 @@ function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
   ctx.save();
   ctx.globalAlpha=0.55;
   // 윗날개 좌우
-  for(let s of[1,-1]){
-    ctx.save();ctx.scale(1,s);
+  for(let ws of[1,-1]){
+    ctx.save();ctx.scale(1,ws);
     ctx.beginPath();
-    ctx.ellipse(-4,-30,18,8,-.4+wingOpen*s,0,Math.PI*2);
+    ctx.ellipse(-4,-30,18,8,-.4+wingOpen*ws,0,Math.PI*2);
     ctx.fillStyle='#d0eeff';ctx.fill();
     ctx.strokeStyle=gc+'88';ctx.lineWidth=1;ctx.stroke();
     // 아랫날개
     ctx.beginPath();
-    ctx.ellipse(4,-22,12,5,-.2+wingOpen*.5*s,0,Math.PI*2);
+    ctx.ellipse(4,-22,12,5,-.2+wingOpen*.5*ws,0,Math.PI*2);
     ctx.fillStyle='#e8f8ff';ctx.fill();
     ctx.restore();
   }
@@ -886,10 +904,14 @@ function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
     ctx.strokeStyle='rgba(0,0,0,.3)';ctx.lineWidth=.5;ctx.stroke();
   }
   // 침
-  ctx.beginPath();ctx.moveTo(27,10);ctx.lineTo(35,14);
-  ctx.strokeStyle='#aaa';ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();
-  ctx.beginPath();ctx.arc(35,14,2,0,Math.PI*2);
-  ctx.fillStyle='#888';ctx.fill();
+  const stingerLen = divingStinger ? 22 : 8;
+  ctx.beginPath();ctx.moveTo(27,10);ctx.lineTo(27+stingerLen, 10+(divingStinger?0:4));
+  ctx.strokeStyle=divingStinger?'#fff':'#aaa';
+  ctx.lineWidth=divingStinger?3:2;ctx.lineCap='round';
+  ctx.shadowColor='#ff88ff';ctx.shadowBlur=divingStinger?14:0;
+  ctx.stroke();ctx.shadowBlur=0;
+  ctx.beginPath();ctx.arc(27+stingerLen,10+(divingStinger?0:4),divingStinger?4:2,0,Math.PI*2);
+  ctx.fillStyle=divingStinger?'#ffaaff':'#888';ctx.fill();
   ctx.restore();
 
   // 흉부
@@ -968,6 +990,7 @@ class Mantis {
     this.ultActive=false;this.ultTimer=0;this.ultCooldown=0;this.ultHitTimer=0;
     this.hookState=null;this.hookX=0;this.hookY=0;this.hookVx=0;this.hookVy=0;
     this.hookTimer=0;this.hookDotTimer=0;
+    this.flying=false;this.flightTimer=0;this.flightCooldown=0;this.diveCooldown=0;this.poisonTimer=0;this.poisonDotTimer=0;
   }
   reset(){
     this.x=this.startX;this.y=GROUND;this.vx=0;this.vy=0;
@@ -977,6 +1000,7 @@ class Mantis {
     this.specialCooldown=0;
     this.ultActive=false;this.ultTimer=0;this.ultCooldown=0;this.ultHitTimer=0;
     this.hookState=null;this.hookTimer=0;this.hookDotTimer=0;
+    this.flying=false;this.flightTimer=0;this.flightCooldown=0;this.diveCooldown=0;this.poisonTimer=0;this.poisonDotTimer=0;
   }
   attack(type){
     if(this.state==='hurt'||this.state==='dead') return;
@@ -990,6 +1014,20 @@ class Mantis {
       this.state='special';this.stateTimer=.5;this.hitbox={ox:this.facing*-40,oy:-85,w:90,h:85,dmg:6,kb:9,type};
       this.specialCooldown=4;
     }
+  }
+  diveBomb(opp){
+    // 벌 비행 중 S키: 침 찌르기 돌진
+    if(!this.flying || this.charType!=='bee') return;
+    if(this.diveCooldown>0) return;
+    const dx=opp.x-this.x, dy=(opp.y-40)-(this.y-40);
+    const dist=Math.sqrt(dx*dx+dy*dy)||1;
+    const speed=850;
+    this.vx=(dx/dist)*speed;
+    this.vy=(dy/dist)*speed;
+    this.state='special'; this.stateTimer=0.5;
+    this.diveCooldown=4;
+    this.divingStinger=true; // 침 찌르기 상태 플래그
+    burst(this.x,this.y-20,this.color,10,true);
   }
   ultimate(opp){
     if(this.state==='dead') return;
@@ -1038,7 +1076,41 @@ class Mantis {
     showAnnounce('ULTIMATE!', this.color);
   }
   jump(){
-    if(this.jumps<2){ this.vy=this.jumps===0?-680:-560;this.jumps++;this.onGround=false;burst(this.x,this.y,this.color,5); }
+    if(this.jumps>=2) return;
+    if(this.jumps===0){
+      // 1단 점프 (공통)
+      const jv = this.charType==='bee' ? -720 : -820;
+      this.vy=jv; this.jumps++; this.onGround=false;
+      burst(this.x,this.y,this.color,5);
+    } else {
+      // 2단 점프
+      if(this.charType==='bee'){
+        if((this.flightCooldown||0)<=0){
+          // 비행 모드 진입
+          this.flying=true;
+          this.flightTimer=10;      // 10초 자유비행
+          this.flightCooldown=15;   // 15초 쿨타임
+          this.vy=-100;
+          burst(this.x,this.y-40,this.color,12,true);
+        } else {
+          // 쿨타임 중이면 그냥 더블점프
+          this.vy=-560;
+        }
+      } else {
+        // 사마귀: 더블점프 시 비행 (5초, 쿨타임 10초)
+        if((this.flightCooldown||0)<=0){
+          this.flying=true;
+          this.flightTimer=5;
+          this.flightCooldown=10;
+          this.vy=-300;
+          burst(this.x,this.y-40,this.color,10,true);
+        } else {
+          this.vy=-680;
+        }
+      }
+      this.jumps++; this.onGround=false;
+      burst(this.x,this.y,this.color,5);
+    }
   }
   update(dt,opp){
     this.frame++;
@@ -1047,6 +1119,43 @@ class Mantis {
     this.invincible=Math.max(0,this.invincible-dt);
     this.specialCooldown=Math.max(0,this.specialCooldown-dt);
     this.ultCooldown=Math.max(0,(this.ultCooldown||0)-dt);
+    this.diveCooldown=Math.max(0,(this.diveCooldown||0)-dt);
+    // 독 도트딜
+    if(this.poisonTimer>0){
+      this.poisonTimer=Math.max(0,this.poisonTimer-dt);
+      this.poisonDotTimer=Math.max(0,(this.poisonDotTimer||0)-dt);
+      if(this.poisonDotTimer<=0&&this.hp>0){
+        this.hp=Math.max(0,this.hp-1); // 0.5초마다 1 (초당 2)
+        this.poisonDotTimer=0.5;
+        updateHPHUD();
+      }
+    }
+    // 침 찌르기 돌진 충돌 체크
+    if(this.charType==='bee'&&this.divingStinger&&this.state==='special'&&this.flying){
+      const dx=opp.x-this.x, dy=(opp.y-40)-(this.y-40);
+      if(Math.sqrt(dx*dx+dy*dy)<55&&opp.hp>0&&opp.invincible<=0){
+        const dmg=opp.blocking?3:6;
+        opp.hp=Math.max(0,opp.hp-dmg);
+        if(!opp.blocking){
+          // 독 부여
+          opp.poisonTimer=3;
+          opp.poisonDotTimer=0.5;
+          // 넉백
+          const kbDir=dx>0?1:-1;
+          opp.vx=kbDir*300;opp.vy=-150;
+          opp.hitstun=.2;opp.invincible=.25;
+          opp.state='hurt';opp.stateTimer=.2;opp.onGround=false;
+        }
+        spark(opp.x,opp.y-30,0,'#a000ff');
+        burst(opp.x,opp.y-30,'#c060ff',12,true);
+        hitStop=.08;
+        this.vx*=0.15;this.vy*=0.15;
+        this.state='idle';
+        this.divingStinger=false;
+      }
+    }
+    // 돌진 상태 종료 시 플래그 해제
+    if(this.state!=='special') this.divingStinger=false;
     if(this.ultActive){
       this.ultTimer=Math.max(0,this.ultTimer-dt);
       this.ultHitTimer=Math.max(0,(this.ultHitTimer||0)-dt);
@@ -1118,12 +1227,19 @@ class Mantis {
     }
     if(this.hitstun<=0&&this.state==='hurt') this.state='idle';
     // 활공: 벌 캐릭터가 공중에서 ↓ 누르면 중력 대폭 감소
-    const isGliding = this.charType==='bee' && !this.onGround && this.gliding;
-    const gravity = isGliding ? 200 : 1500;
-    if(isGliding && this.vy>60) this.vy=Math.max(60, this.vy-800*dt); // 하강속도 제한
+    // 비행 쿨타임 감소
+    if(this.flightCooldown>0) this.flightCooldown=Math.max(0,this.flightCooldown-dt);
+    // 비행 모드 업데이트 (시간 다 되면 해제, 착지는 별도)
+    if(this.flying){
+      this.flightTimer=Math.max(0,this.flightTimer-dt);
+      if(this.flightTimer<=0){ this.flying=false; }
+    }
+    const gravity = (this.flying && this.charType==='mantis') ? 120 : (this.flying ? 0 : 1500);
+    if(this.flying && this.charType==='mantis' && this.vy>40) this.vy=Math.max(40, this.vy-600*dt);
     if(!this.onGround) this.vy+=gravity*dt;
     this.y+=this.vy*dt;this.x+=this.vx*dt;
-    if(this.y>=GROUND){ this.y=GROUND;this.vy=0;this.onGround=true;this.jumps=0;this.gliding=false; }
+    if(this.y>=GROUND){ this.y=GROUND;this.vy=0;this.onGround=true;this.jumps=0;this.flying=false; }
+    if(this.y<10){ this.y=10;this.vy=Math.max(0,this.vy); }
     this.x=Math.max(40,Math.min(1060-40,this.x));
     if(this.hitstun<=0&&this.stateTimer<=0) this.facing=opp.x>this.x?-1:1;
     if(this.onGround&&this.hitstun<=0) this.vx*=.7;
@@ -1147,6 +1263,22 @@ class Mantis {
   }
   draw(){
     if(this.hp<=0&&this.state!=='dead') this.state='dead';
+    // 독 오버레이
+    if(this.poisonTimer>0){
+      ctx.save();
+      ctx.globalAlpha=0.18+Math.sin(Date.now()*.008)*0.07;
+      ctx.fillStyle='#8800cc';
+      ctx.beginPath();ctx.ellipse(this.x,this.y-35,22,40,0,0,Math.PI*2);ctx.fill();
+      ctx.restore();
+      // 독 아이콘 + 남은 시간
+      ctx.save();
+      ctx.font='13px serif';ctx.textAlign='center';
+      ctx.fillText('☠',this.x,this.y-80);
+      ctx.font='bold 10px Share Tech Mono';
+      ctx.fillStyle='#cc88ff';ctx.globalAlpha=0.9;
+      ctx.fillText(Math.ceil(this.poisonTimer)+'s',this.x,this.y-68);
+      ctx.restore();
+    }
     // 갈고리 줄 그리기
     if(this.hookState){
       ctx.save();
@@ -1173,13 +1305,13 @@ class Mantis {
     }
     const drawState=this.ultActive?'special':this.state;
     if(this.charType==='bee'){
-      drawBee(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive);
+      drawBee(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive,this.divingStinger);
     } else {
       drawMantis(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive);
     }
   }
   getState(){
-    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown,charType:this.charType,hookState:this.hookState,hookX:this.hookX,hookY:this.hookY,hookTimer:this.hookTimer};
+    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown,charType:this.charType,hookState:this.hookState,hookX:this.hookX,hookY:this.hookY,hookTimer:this.hookTimer,poisonTimer:this.poisonTimer};
   }
   applyState(s){
     this.x=s.x;this.y=s.y;this.vx=s.vx;this.vy=s.vy;this.hp=s.hp;
@@ -1189,6 +1321,7 @@ class Mantis {
     this.ultActive=s.ultActive||false;this.ultTimer=s.ultTimer||0;this.ultCooldown=s.ultCooldown||0;
     if(s.charType) this.charType=s.charType;
     this.hookState=s.hookState||null;this.hookX=s.hookX||0;this.hookY=s.hookY||0;this.hookTimer=s.hookTimer||0;
+    this.poisonTimer=s.poisonTimer||0;
   }
 }
 
@@ -1286,19 +1419,29 @@ function loop(ts){
     if(isCPUMode){
       if(p1.hitstun<=0&&p1.hp>0){
         const spd=p1.blocking?80:230;
-        if(keys['ArrowLeft']) p1.vx=-spd;
-        else if(keys['ArrowRight']) p1.vx=spd;
-        else if(p1.onGround) p1.vx*=.5;
+        if(p1.flying && p1.charType==='bee'){
+          // 비행 중: 화살표로 자유 이동
+          const fspd=200;
+          p1.vx = keys['ArrowLeft']?-fspd : keys['ArrowRight']?fspd : p1.vx*0.85;
+          p1.vy = keys['ArrowUp']?-fspd : keys['KeyF']?fspd : p1.vy*0.85;
+          p1.blocking=false;
+        } else {
+          if(keys['ArrowLeft']) p1.vx=-spd;
+          else if(keys['ArrowRight']) p1.vx=spd;
+          else if(p1.onGround) p1.vx*=.5;
+          p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
+        }
         if(jp['ArrowUp']) p1.jump();
         if(jp['KeyA']) p1.attack('weak');
-        if(jp['KeyS']) p1.attack('strong');
+        if(jp['KeyS']){
+          if(p1.flying&&p1.charType==='bee') p1.diveBomb(p2);
+          else p1.attack('strong');
+        }
         if(jp['KeyD']){
           if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
           else p1.attack('special');
         }
         if(jp['KeyR']) p1.ultimate(p2);
-        if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
-        p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
       }
       aiUpdate(p2,p1,dt);
       p1.update(dt,p2);p2.update(dt,p1);
@@ -1328,30 +1471,51 @@ function loop(ts){
       if(myRole==='host'){
         if(p1.hitstun<=0&&p1.hp>0){
           const spd=p1.blocking?80:230;
-          if(keys['ArrowLeft']) p1.vx=-spd;
-          else if(keys['ArrowRight']) p1.vx=spd;
-          else if(p1.onGround) p1.vx*=.5;
+          if(p1.flying && p1.charType==='bee'){
+            const fspd=200;
+            p1.vx = keys['ArrowLeft']?-fspd : keys['ArrowRight']?fspd : p1.vx*0.85;
+            p1.vy = keys['ArrowUp']?-fspd : keys['KeyF']?fspd : p1.vy*0.85;
+            p1.blocking=false;
+          } else {
+            if(keys['ArrowLeft']) p1.vx=-spd;
+            else if(keys['ArrowRight']) p1.vx=spd;
+            else if(p1.onGround) p1.vx*=.5;
+            p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
+          }
           if(jp['ArrowUp']) p1.jump();
           if(jp['KeyA']) p1.attack('weak');
-          if(jp['KeyS']) p1.attack('strong');
+          if(jp['KeyS']){
+            if(p1.flying&&p1.charType==='bee') p1.diveBomb(p2);
+            else p1.attack('strong');
+          }
           if(jp['KeyD']){
             if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
             else p1.attack('special');
           }
           if(jp['KeyR']) p1.ultimate(p2);
-          if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
-          p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
         }
         if(p2.hitstun<=0&&p2.hp>0){
           const spd2=p2.blocking?80:230;
-          if(opponentKeys['ArrowLeft']) p2.vx=-spd2;
-          else if(opponentKeys['ArrowRight']) p2.vx=spd2;
-          else if(p2.onGround) p2.vx*=.5;
+          if(p2.flying && p2.charType==='bee'){
+            const fspd=200;
+            p2.vx = opponentKeys['ArrowLeft']?-fspd : opponentKeys['ArrowRight']?fspd : p2.vx*0.85;
+            p2.vy = opponentKeys['ArrowUp']?-fspd : opponentKeys['KeyF']?fspd : p2.vy*0.85;
+            p2.blocking=false;
+          } else {
+            if(opponentKeys['ArrowLeft']) p2.vx=-spd2;
+            else if(opponentKeys['ArrowRight']) p2.vx=spd2;
+            else if(p2.onGround) p2.vx*=.5;
+            p2.blocking=!!(opponentKeys['ArrowDown']||opponentKeys['KeyF']);
+          }
           if(opponentKeys['ArrowUp']&&!p2._oppJumpHeld){p2.jump();p2._oppJumpHeld=true;}
           if(!opponentKeys['ArrowUp']) p2._oppJumpHeld=false;
           if(opponentKeys['KeyA']&&!p2._oppAHeld){p2.attack('weak');p2._oppAHeld=true;}
           if(!opponentKeys['KeyA']) p2._oppAHeld=false;
-          if(opponentKeys['KeyS']&&!p2._oppSHeld){p2.attack('strong');p2._oppSHeld=true;}
+          if(opponentKeys['KeyS']&&!p2._oppSHeld){
+            if(p2.flying&&p2.charType==='bee') p2.diveBomb(p1);
+            else p2.attack('strong');
+            p2._oppSHeld=true;
+          }
           if(!opponentKeys['KeyS']) p2._oppSHeld=false;
           if(opponentKeys['KeyD']&&!p2._oppDHeld){
             if(p2.charType==='bee'){ if(p2.specialCooldown<=0){ fireStinger('p2',p2.x,p2.y-40,p2.facing,p2.color); p2.specialCooldown=1.2; } }
@@ -1361,9 +1525,7 @@ function loop(ts){
           if(!opponentKeys['KeyD']) p2._oppDHeld=false;
           if(opponentKeys['KeyR']&&!p2._oppRHeld){p2.ultimate(p1);p2._oppRHeld=true;}
           if(!opponentKeys['KeyR']) p2._oppRHeld=false;
-          if(opponentKeys['ArrowDown']&&!p2._oppDownHeld&&p2.charType==='bee'&&!p2.onGround) p2.gliding=!p2.gliding;
           p2._oppDownHeld=!!opponentKeys['ArrowDown'];
-          p2.blocking=!!(opponentKeys['ArrowDown']||opponentKeys['KeyF']);
         }
         p1.update(dt,p2);p2.update(dt,p1);
         p1.checkHit(p2);p2.checkHit(p1);
