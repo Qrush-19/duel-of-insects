@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>MANTIS DUEL — Online</title>
+<title>DUEL OF INSECTS</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Share+Tech+Mono&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -165,7 +165,23 @@ canvas{display:block;box-shadow:0 0 80px rgba(0,0,0,.8);}
   font-size:9px;
 }
 
-/* Quick Match 대기 점 애니메이션 */
+/* 캐릭터 선택 */
+.char-select{display:flex;gap:12px;justify-content:center;}
+.char-card{
+  width:64px;padding:8px 0;
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:8px;cursor:pointer;
+  text-align:center;transition:all .15s;
+}
+.char-card:hover{background:rgba(255,255,255,.1);transform:scale(1.05);}
+.char-card.selected{
+  border-color:var(--gold);
+  background:rgba(240,192,64,.1);
+  box-shadow:0 0 12px rgba(240,192,64,.3);
+}
+.char-icon{font-size:28px;line-height:1;}
+.char-name{font-size:9px;letter-spacing:2px;opacity:.6;margin-top:4px;}
 .queue-dots{display:flex;gap:10px;margin:8px 0;}
 .queue-dots span{
   width:10px;height:10px;border-radius:50%;
@@ -231,11 +247,22 @@ canvas{display:block;box-shadow:0 0 80px rgba(0,0,0,.8);}
 
   <!-- 메인 메뉴 -->
   <div class="overlay" id="menu-screen">
-    <h1>MANTIS DUEL</h1>
+    <h1>DUEL OF INSECTS</h1>
     <div class="name-label">내 닉네임</div>
     <input class="name-input" id="my-name-input" maxlength="12" placeholder="닉네임 입력..." spellcheck="false">
     <div class="color-label">사마귀 색상</div>
     <div class="color-swatches" id="color-swatches"></div>
+    <div class="color-label">캐릭터 선택</div>
+    <div class="char-select" id="char-select">
+      <div class="char-card selected" id="char-mantis" onclick="selectChar('mantis')">
+        <div class="char-icon">🦗</div>
+        <div class="char-name">사마귀</div>
+      </div>
+      <div class="char-card" id="char-bee" onclick="selectChar('bee')">
+        <div class="char-icon">🐝</div>
+        <div class="char-name">벌</div>
+      </div>
+    </div>
     <div class="btn-row">
       <button class="btn" onclick="showCreate()">방 만들기</button>
       <button class="btn" onclick="showJoin()">방 입장</button>
@@ -302,7 +329,8 @@ let ws = null;
 let myRole = null;
 let myRoomId = null;
 let myName = 'PLAYER';
-let myColor = '#7fff8a';  // 기본 색상
+let myColor = '#7fff8a';
+let myCharType = 'mantis';  // 'mantis' | 'bee'
 let opponentName = 'OPPONENT';
 let pingStart = 0, latency = 0;
 let rematchVote = false;
@@ -337,6 +365,12 @@ function initColorPicker(){
     };
     wrap.appendChild(el);
   });
+}
+
+function selectChar(type){
+  myCharType=type;
+  document.querySelectorAll('.char-card').forEach(c=>c.classList.remove('selected'));
+  document.getElementById('char-'+type).classList.add('selected');
 }
 
 function connectWS(cb) {
@@ -376,7 +410,7 @@ function handleMessage(msg) {
       document.getElementById('join-screen').classList.add('hidden');
       document.getElementById('queue-screen').classList.add('hidden');
       // 내 이름+색상 상대에게 전송
-      wsSend({ type: 'player_name', name: myName, color: myColor });
+      wsSend({ type: 'player_name', name: myName, color: myColor, charType: myCharType });
       initGame();
       break;
 
@@ -385,10 +419,12 @@ function handleMessage(msg) {
 
     case 'player_name':
       opponentName = msg.name || 'OPPONENT';
-      // 상대 색상 적용
-      if(msg.color){
+      if(msg.color||msg.charType){
         const opp = myRole==='host' ? p2 : p1;
-        if(opp) opp.color = msg.color;
+        if(opp){
+          if(msg.color) opp.color = msg.color;
+          if(msg.charType) opp.charType = msg.charType;
+        }
       }
       updateNameHUD();
       break;
@@ -455,8 +491,7 @@ function startVsCPU() {
   opponentName = 'CPU';
   document.getElementById('menu-screen').classList.add('hidden');
   initGame();
-}
-// ── 키뷰어 ──
+}// ── 키뷰어 ──
 function updateKeyViewer(){
   const kv = document.getElementById('key-viewer');
   if(!running||gamePhase!=='fight'){ kv.classList.remove('visible'); return; }
@@ -596,8 +631,72 @@ function spark(x,y,dir,color){
 }
 
 // ════════════════════════════════════════════════════
-//  사마귀 그리기
+//  투사체 (벌침)
 // ════════════════════════════════════════════════════
+let stingers=[];
+
+function fireStinger(owner, x, y, facing, color){
+  stingers.push({
+    owner,          // 'p1' | 'p2'
+    x, y,
+    vx: facing * -520,  // facing=-1이 오른쪽이므로 반전
+    vy: 0,
+    color,
+    life: 1.2,      // 1.2초 후 소멸
+    hit: false,
+  });
+}
+
+function updateStingers(dt, p1, p2){
+  for(const s of stingers){
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.life -= dt;
+    if(s.hit || s.life<=0) continue;
+    // 충돌 체크
+    const target = s.owner==='p1' ? p2 : p1;
+    if(!target||target.hp<=0||target.invincible>0) continue;
+    const dx=Math.abs(s.x-target.x), dy=Math.abs(s.y-(target.y-40));
+    if(dx<28&&dy<40){
+      const dmg = target.blocking ? 1 : 6;
+      target.hp = Math.max(0, target.hp-dmg);
+      if(!target.blocking){
+        target.vx = (s.vx>0?1:-1)*180;
+        target.hitstun=.15; target.invincible=.2;
+        target.state='hurt'; target.stateTimer=.15;
+      }
+      spark(s.x, s.y, 0, s.color);
+      burst(s.x, s.y, s.color, 6, false);
+      s.hit=true;
+    }
+  }
+  stingers = stingers.filter(s=>!s.hit && s.life>0);
+}
+
+function drawStingers(){
+  for(const s of stingers){
+    const alpha = Math.min(1, s.life*2);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(s.x, s.y);
+    ctx.rotate(Math.atan2(s.vy, s.vx));
+    // 침 몸통
+    ctx.beginPath();
+    ctx.moveTo(-10, 0); ctx.lineTo(10, 0);
+    ctx.strokeStyle = s.color; ctx.lineWidth = 3; ctx.lineCap='round';
+    ctx.shadowColor = s.color; ctx.shadowBlur = 8;
+    ctx.stroke();
+    // 침 끝
+    ctx.beginPath();
+    ctx.moveTo(10,0); ctx.lineTo(16,-3); ctx.lineTo(16,3); ctx.closePath();
+    ctx.fillStyle = '#fff'; ctx.fill();
+    // 꼬리 잔상
+    ctx.beginPath();
+    ctx.moveTo(-10,0); ctx.lineTo(-22,0);
+    ctx.strokeStyle=s.color+'66'; ctx.lineWidth=2; ctx.stroke();
+    ctx.restore();
+  }
+}
 function drawMantis(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
   ctx.save();
   ctx.translate(x,y);
@@ -666,16 +765,131 @@ function drawMantis(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
 }
 
 // ════════════════════════════════════════════════════
-//  Mantis 클래스
+//  벌 그리기
 // ════════════════════════════════════════════════════
+function drawBee(x,y,facing,color,state,frame,hp,blocking,ultActive=false){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.scale(facing,1);
+  const t=frame;
+  const gc=color;
+  const attackState=state==='weak'||state==='strong'||state==='special';
+
+  if(hp<=0){ctx.rotate(Math.PI/2);ctx.translate(0,-20);}
+
+  // 그림자
+  ctx.save();ctx.scale(1,.15);ctx.beginPath();ctx.ellipse(0,0,22,10,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,.3)';ctx.fill();ctx.restore();
+
+  // 글로우
+  ctx.shadowColor=gc;
+  ctx.shadowBlur=ultActive?(16+Math.sin(Date.now()*.015)*8)*2:(attackState?20:8);
+
+  // 날개 (공격 시 펼침, 평시엔 파닥)
+  const wingFlap=Math.sin(t*.35)*0.25;
+  const wingOpen=attackState?0.6:wingFlap;
+  ctx.save();
+  ctx.globalAlpha=0.55;
+  // 윗날개 좌우
+  for(let s of[1,-1]){
+    ctx.save();ctx.scale(1,s);
+    ctx.beginPath();
+    ctx.ellipse(-4,-30,18,8,-.4+wingOpen*s,0,Math.PI*2);
+    ctx.fillStyle='#d0eeff';ctx.fill();
+    ctx.strokeStyle=gc+'88';ctx.lineWidth=1;ctx.stroke();
+    // 아랫날개
+    ctx.beginPath();
+    ctx.ellipse(4,-22,12,5,-.2+wingOpen*.5*s,0,Math.PI*2);
+    ctx.fillStyle='#e8f8ff';ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // 복부 (줄무늬)
+  const bodyBob=Math.sin(t*.08)*.8;
+  ctx.save();ctx.translate(10,-12+bodyBob);ctx.rotate(-.2+Math.sin(t*.06)*.04);
+  const stripes=['#1a1a1a',gc,gc,'#1a1a1a',gc];
+  for(let i=0;i<5;i++){
+    ctx.beginPath();
+    ctx.ellipse(i*5.5,i*2.2,10-i,7.5-i*.5,.25,0,Math.PI*2);
+    ctx.fillStyle=stripes[i];ctx.fill();
+    ctx.strokeStyle='rgba(0,0,0,.3)';ctx.lineWidth=.5;ctx.stroke();
+  }
+  // 침
+  ctx.beginPath();ctx.moveTo(27,10);ctx.lineTo(35,14);
+  ctx.strokeStyle='#aaa';ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();
+  ctx.beginPath();ctx.arc(35,14,2,0,Math.PI*2);
+  ctx.fillStyle='#888';ctx.fill();
+  ctx.restore();
+
+  // 흉부
+  ctx.beginPath();ctx.ellipse(-2,-20,9,11,-.1,0,Math.PI*2);
+  ctx.fillStyle='#1a1a1a';ctx.fill();
+  ctx.beginPath();ctx.ellipse(-2,-20,7,9,-.1,0,Math.PI*2);
+  ctx.fillStyle=gc;ctx.globalAlpha=.6;ctx.fill();ctx.globalAlpha=1;
+
+  // 다리 (6개)
+  for(let i=0;i<3;i++){
+    const legSwing=Math.sin(t*.25+i*1.1)*10;
+    [1,-1].forEach(s=>{
+      ctx.save();ctx.translate(i*6-4,-14+i*2);ctx.rotate(s*(.5+i*.1)+(legSwing*.015)*s);
+      ctx.strokeStyle=gc+'bb';ctx.lineWidth=1.5;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(10,7);ctx.stroke();
+      ctx.translate(10,7);ctx.rotate(s*.5);
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(7,7);ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  // 앞다리 (공격용 펀치)
+  const a1=attackState?-2.0:(blocking?-1.0:-.6+Math.sin(t*.06)*.1);
+  for(let s of[1,-1]){
+    ctx.save();ctx.translate(-6,-22);ctx.scale(1,s);
+    ctx.rotate(a1);
+    ctx.strokeStyle=gc;ctx.lineWidth=3.5;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-10,-12);ctx.stroke();
+    ctx.translate(-10,-12);ctx.rotate(attackState?.4:-.3);
+    ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-8,-10);ctx.stroke();
+    // 주먹
+    ctx.beginPath();ctx.ellipse(-8,-10,5,4,.3,0,Math.PI*2);
+    ctx.fillStyle=attackState?'#fff':gc;ctx.fill();
+    ctx.restore();
+  }
+
+  // 머리 (둥근 벌 머리)
+  ctx.save();ctx.translate(-12,-34);
+  ctx.beginPath();ctx.ellipse(0,0,10,10,0,0,Math.PI*2);
+  ctx.fillStyle='#1a1a1a';ctx.fill();
+  ctx.beginPath();ctx.ellipse(0,0,8,8,0,0,Math.PI*2);
+  ctx.fillStyle=gc;ctx.fill();
+  // 겹눈
+  ctx.fillStyle='#111';
+  ctx.beginPath();ctx.ellipse(-5,-3,4,5,.3,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.ellipse(5,-3,4,5,-.3,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=gc+'99';
+  ctx.beginPath();ctx.ellipse(-4,-4,1.5,2,.3,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.ellipse(5,-4,1.5,2,-.3,0,Math.PI*2);ctx.fill();
+  // 더듬이
+  const aw2=Math.sin(t*.07)*5;
+  ctx.strokeStyle=gc+'aa';ctx.lineWidth=1.5;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(-3,-10);ctx.quadraticCurveTo(-8+aw2,-20,-5+aw2,-26);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(3,-10);ctx.quadraticCurveTo(8-aw2,-20,5-aw2,-26);ctx.stroke();
+  ctx.beginPath();ctx.arc(-5+aw2,-26,2,0,Math.PI*2);ctx.fillStyle=gc;ctx.fill();
+  ctx.beginPath();ctx.arc(5-aw2,-26,2,0,Math.PI*2);ctx.fillStyle=gc;ctx.fill();
+  ctx.restore();
+
+  ctx.shadowBlur=0;ctx.restore();
+}
+
+
 const GROUND=390, MAX_HP=100;
 class Mantis {
-  constructor(x,isP1,color){
+  constructor(x,isP1,color,charType='mantis'){
     this.startX=x;this.x=x;this.y=GROUND;
     this.vx=0;this.vy=0;
     this.facing=isP1?-1:1;this.initFacing=isP1?-1:1;
     this.onGround=true;this.jumps=0;
     this.hp=MAX_HP;this.isP1=isP1;this.color=color;
+    this.charType=charType;
     this.state='idle';this.stateTimer=0;
     this.hitbox=null;this.hitstun=0;this.invincible=0;
     this.blocking=false;this.frame=0;
@@ -759,9 +973,13 @@ class Mantis {
     }
     if(this.stateTimer<=0&&(this.state==='weak'||this.state==='strong'||this.state==='special'||this.state==='hurt')){ this.state='idle';this.hitbox=null; }
     if(this.hitstun<=0&&this.state==='hurt') this.state='idle';
-    if(!this.onGround) this.vy+=1500*dt;
+    // 활공: 벌 캐릭터가 공중에서 ↓ 누르면 중력 대폭 감소
+    const isGliding = this.charType==='bee' && !this.onGround && this.gliding;
+    const gravity = isGliding ? 200 : 1500;
+    if(isGliding && this.vy>60) this.vy=Math.max(60, this.vy-800*dt); // 하강속도 제한
+    if(!this.onGround) this.vy+=gravity*dt;
     this.y+=this.vy*dt;this.x+=this.vx*dt;
-    if(this.y>=GROUND){ this.y=GROUND;this.vy=0;this.onGround=true;this.jumps=0; }
+    if(this.y>=GROUND){ this.y=GROUND;this.vy=0;this.onGround=true;this.jumps=0;this.gliding=false; }
     this.x=Math.max(40,Math.min(860-40,this.x));
     if(this.hitstun<=0&&this.stateTimer<=0) this.facing=opp.x>this.x?-1:1;
     if(this.onGround&&this.hitstun<=0) this.vx*=.7;
@@ -785,10 +1003,15 @@ class Mantis {
   }
   draw(){
     if(this.hp<=0&&this.state!=='dead') this.state='dead';
-    drawMantis(this.x,this.y,this.facing,this.color,this.ultActive?'special':this.state,this.frame,this.hp,this.blocking,this.ultActive);
+    const drawState=this.ultActive?'special':this.state;
+    if(this.charType==='bee'){
+      drawBee(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive);
+    } else {
+      drawMantis(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive);
+    }
   }
   getState(){
-    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown};
+    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown,charType:this.charType};
   }
   applyState(s){
     this.x=s.x;this.y=s.y;this.vx=s.vx;this.vy=s.vy;this.hp=s.hp;
@@ -796,6 +1019,7 @@ class Mantis {
     this.hitstun=s.hitstun;this.invincible=s.invincible;this.blocking=s.blocking;
     this.hitbox=s.hitbox;this.specialCooldown=s.specialCooldown||0;
     this.ultActive=s.ultActive||false;this.ultTimer=s.ultTimer||0;this.ultCooldown=s.ultCooldown||0;
+    if(s.charType) this.charType=s.charType;
   }
 }
 
@@ -815,20 +1039,25 @@ const leaves=Array.from({length:18},()=>({x:Math.random()*860,y:Math.random()*34
 const vines=Array.from({length:6},()=>({x:Math.random()*860,speed:.3+Math.random()*.4,offset:Math.random()*100}));
 
 function updateNameHUD(){
+  const myEmoji = myCharType==='bee'?'🐝':'🦗';
   if(myRole==='host'){
-    document.getElementById('p1-name').textContent = '🦗 ' + myName;
+    document.getElementById('p1-name').textContent = myEmoji+' ' + myName;
     document.getElementById('p2-name').textContent = opponentName + ' 🦗';
   } else {
     document.getElementById('p1-name').textContent = '🦗 ' + opponentName;
-    document.getElementById('p2-name').textContent = myName + ' 🦗';
+    document.getElementById('p2-name').textContent = myName + ' '+myEmoji;
   }
 }
 
 function initGame(){
   const p1Color = myRole==='guest' ? '#ff6e7f' : myColor;
   const p2Color = myRole==='guest' ? myColor : '#ff6e7f';
-  p1=new Mantis(180,true,p1Color);
-  p2=new Mantis(680,false,p2Color);
+  const myChar  = myCharType;
+  const oppChar = 'mantis'; // 기본값, player_name 수신 후 교체됨
+  const p1Char  = myRole==='guest' ? oppChar : myChar;
+  const p2Char  = myRole==='guest' ? myChar  : oppChar;
+  p1=new Mantis(180,true,p1Color,p1Char);
+  p2=new Mantis(680,false,p2Color,p2Char);
   roundNum=1;p1Wins=0;p2Wins=0;particles=[];
   updateNameHUD();
   updateRoundHUD();
@@ -836,7 +1065,7 @@ function initGame(){
 }
 
 function startRound(){
-  p1.reset();p2.reset();particles=[];hitStop=0;
+  p1.reset();p2.reset();particles=[];stingers=[];hitStop=0;
   gamePhase='announce';phaseTimer=1.5;
   updateHPHUD();
   showAnnounce('ROUND '+roundNum);
@@ -894,13 +1123,18 @@ function loop(ts){
         if(jp['ArrowUp']) p1.jump();
         if(jp['KeyA']) p1.attack('weak');
         if(jp['KeyS']) p1.attack('strong');
-        if(jp['KeyD']) p1.attack('special');
+        if(jp['KeyD']){
+          if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
+          else p1.attack('special');
+        }
         if(jp['KeyR']) p1.ultimate();
+        if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
         p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
       }
       aiUpdate(p2,p1,dt);
       p1.update(dt,p2);p2.update(dt,p1);
       p1.checkHit(p2);p2.checkHit(p1);
+      updateStingers(dt,p1,p2);
       for(const pt of particles){pt.x+=pt.vx*dt;pt.y+=pt.vy*dt;pt.vy+=700*dt;pt.life-=dt*(pt.spark?3.5:2);}
       particles=particles.filter(p=>p.life>0);
       if(p1.hp<=0||p2.hp<=0){
@@ -931,8 +1165,12 @@ function loop(ts){
           if(jp['ArrowUp']) p1.jump();
           if(jp['KeyA']) p1.attack('weak');
           if(jp['KeyS']) p1.attack('strong');
-          if(jp['KeyD']) p1.attack('special');
+          if(jp['KeyD']){
+            if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
+            else p1.attack('special');
+          }
           if(jp['KeyR']) p1.ultimate();
+          if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
           p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
         }
         if(p2.hitstun<=0&&p2.hp>0){
@@ -946,14 +1184,21 @@ function loop(ts){
           if(!opponentKeys['KeyA']) p2._oppAHeld=false;
           if(opponentKeys['KeyS']&&!p2._oppSHeld){p2.attack('strong');p2._oppSHeld=true;}
           if(!opponentKeys['KeyS']) p2._oppSHeld=false;
-          if(opponentKeys['KeyD']&&!p2._oppDHeld){p2.attack('special');p2._oppDHeld=true;}
+          if(opponentKeys['KeyD']&&!p2._oppDHeld){
+            if(p2.charType==='bee'){ if(p2.specialCooldown<=0){ fireStinger('p2',p2.x,p2.y-40,p2.facing,p2.color); p2.specialCooldown=1.2; } }
+            else p2.attack('special');
+            p2._oppDHeld=true;
+          }
           if(!opponentKeys['KeyD']) p2._oppDHeld=false;
           if(opponentKeys['KeyR']&&!p2._oppRHeld){p2.ultimate();p2._oppRHeld=true;}
           if(!opponentKeys['KeyR']) p2._oppRHeld=false;
+          if(opponentKeys['ArrowDown']&&!p2._oppDownHeld&&p2.charType==='bee'&&!p2.onGround) p2.gliding=!p2.gliding;
+          p2._oppDownHeld=!!opponentKeys['ArrowDown'];
           p2.blocking=!!(opponentKeys['ArrowDown']||opponentKeys['KeyF']);
         }
         p1.update(dt,p2);p2.update(dt,p1);
         p1.checkHit(p2);p2.checkHit(p1);
+        updateStingers(dt,p1,p2);
         for(const pt of particles){pt.x+=pt.vx*dt;pt.y+=pt.vy*dt;pt.vy+=700*dt;pt.life-=dt*(pt.spark?3.5:2);}
         particles=particles.filter(p=>p.life>0);
         stateSendTimer+=dt;
@@ -1050,6 +1295,7 @@ function drawAll(){
   ctx.strokeStyle='rgba(80,160,30,.4)';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,GROUND);ctx.lineTo(860,GROUND);ctx.stroke();
   for(let i=0;i<30;i++){ctx.fillStyle=`rgba(60,120,20,${.1+Math.random()*.1})`;ctx.beginPath();ctx.ellipse(i*32+Math.sin(i)*10,GROUND+4,8+Math.random()*12,2,0,0,Math.PI*2);ctx.fill();}
   for(const pt of particles){ctx.save();ctx.globalAlpha=Math.max(0,pt.life);ctx.fillStyle=pt.color;ctx.shadowColor=pt.color;ctx.shadowBlur=pt.spark?10:4;ctx.beginPath();ctx.arc(pt.x,pt.y,pt.size*Math.max(.1,pt.life),0,Math.PI*2);ctx.fill();ctx.restore();}
+  drawStingers();
   if(p2) p2.draw();
   if(p1) p1.draw();
   [p1,p2].forEach(f=>{if(f&&f.hp>0&&f.hp<20&&Math.floor(Date.now()/200)%2===0){ctx.save();ctx.globalAlpha=.08;ctx.fillStyle=f.color;ctx.fillRect(0,0,860,480);ctx.restore();}});
