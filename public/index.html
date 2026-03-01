@@ -24,10 +24,10 @@ body::before{
     radial-gradient(ellipse at 100% 50%,rgba(60,0,0,.2) 0%,transparent 40%);
   pointer-events:none;
 }
-#wrapper{position:relative;width:1060px;height:580px;}
+#wrapper{position:relative;width:1060px;height:auto;}
 
 /* HUD */
-#hud{display:flex;align-items:center;justify-content:space-between;padding:0 0 8px;gap:12px;}
+#hud{display:flex;align-items:center;justify-content:space-between;padding:0 0 8px;gap:12px;position:relative;z-index:1;}
 .hud-side{display:flex;flex-direction:column;gap:5px;flex:1;}
 .fighter-name{font-family:'Cinzel Decorative',serif;font-size:11px;letter-spacing:3px;}
 #p1-name{color:var(--p1c);text-shadow:0 0 10px rgba(77,255,110,.5);}
@@ -50,9 +50,9 @@ canvas{display:block;box-shadow:0 0 80px rgba(0,0,0,.8);}
 /* Overlays */
 .overlay{
   position:absolute;left:0;right:0;top:0;bottom:0;
-  background:rgba(5,12,4,.93);
+  background:rgba(5,12,4,.97);
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:20px;backdrop-filter:blur(10px);z-index:100;
+  gap:20px;backdrop-filter:blur(10px);z-index:200;
 }
 .overlay.hidden{display:none;}
 .overlay h1{font-family:'Cinzel Decorative',serif;font-size:46px;letter-spacing:8px;color:var(--gold);text-shadow:0 0 30px rgba(240,192,64,.6);}
