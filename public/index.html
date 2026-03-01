@@ -590,12 +590,15 @@ function updateKeyViewer(){
   }
   // R키 쿨타임 표시
   const rKey = document.getElementById('kv-r');
-  if(myMantis && myMantis.ultCooldown>0 && !myMantis.ultActive){
+  if(myMantis && myMantis.ultCooldown>0 && !myMantis.ultActive && !myMantis.hookState){
     rKey.classList.add('cooldown');
     rKey.textContent = Math.ceil(myMantis.ultCooldown);
   } else {
     rKey.classList.remove('cooldown');
-    rKey.textContent = myMantis&&myMantis.ultActive ? '●' : 'R';
+    if(myMantis&&myMantis.hookState==='hooked') rKey.textContent='🪝';
+    else if(myMantis&&myMantis.hookState==='flying') rKey.textContent='↗';
+    else if(myMantis&&myMantis.ultActive) rKey.textContent='●';
+    else rKey.textContent='R';
   }
 }
 function aiUpdate(ai, opp, dt) {
@@ -963,6 +966,8 @@ class Mantis {
     this.blocking=false;this.frame=0;
     this.specialCooldown=0;
     this.ultActive=false;this.ultTimer=0;this.ultCooldown=0;this.ultHitTimer=0;
+    this.hookState=null;this.hookX=0;this.hookY=0;this.hookVx=0;this.hookVy=0;
+    this.hookTimer=0;this.hookDotTimer=0;
   }
   reset(){
     this.x=this.startX;this.y=GROUND;this.vx=0;this.vy=0;
@@ -971,6 +976,7 @@ class Mantis {
     this.hitbox=null;this.hitstun=0;this.invincible=0;this.blocking=false;
     this.specialCooldown=0;
     this.ultActive=false;this.ultTimer=0;this.ultCooldown=0;this.ultHitTimer=0;
+    this.hookState=null;this.hookTimer=0;this.hookDotTimer=0;
   }
   attack(type){
     if(this.state==='hurt'||this.state==='dead') return;
@@ -985,16 +991,49 @@ class Mantis {
       this.specialCooldown=4;
     }
   }
-  ultimate(){
+  ultimate(opp){
     if(this.state==='dead') return;
     if(this.blocking) return;
+    // ── 벌: 갈고리 ──
+    if(this.charType==='bee'){
+      if(this.hookState==='hooked'){
+        // 2번째 R: 상대에게 돌진 + 근접 타격
+        this.x=opp.x+(this.x<opp.x?-45:45);
+        this.y=opp.y; this.vx=0; this.vy=0;
+        if(opp.hp>0&&opp.invincible<=0){
+          const dmg=opp.blocking?1:5;
+          opp.hp=Math.max(0,opp.hp-dmg);
+          if(!opp.blocking){
+            const kbDir=opp.x>this.x?1:-1;
+            opp.vx=kbDir*400;opp.vy=-250;
+            opp.hitstun=.25;opp.invincible=.3;
+            opp.state='hurt';opp.stateTimer=.25;opp.onGround=false;
+          }
+          spark(opp.x,opp.y-30,0,this.color);
+          burst(opp.x,opp.y-30,this.color,10,true);
+          hitStop=.08;
+        }
+        this.hookState=null;
+        this.ultCooldown=20;
+        return;
+      }
+      if(this.hookState==='flying') return;
+      if(this.ultCooldown>0) return;
+      // 1번째 R: 갈고리 발사
+      this.hookState='flying';
+      this.hookX=this.x; this.hookY=this.y-40;
+      this.hookVx=this.facing*-700; this.hookVy=-30;
+      this.hookTimer=0; this.hookDotTimer=0;
+      return;
+    }
+    // ── 사마귀: 기존 얼티밋 ──
     if(this.ultCooldown>0) return;
     if(this.ultActive) return;
     this.ultActive=true;
-    this.ultTimer=3;        // 3초 지속
-    this.ultCooldown=30;    // 30초 쿨타임
+    this.ultTimer=3;
+    this.ultCooldown=30;
     this.ultHitTimer=0;
-    this.invincible=999;    // 지속시간 동안 무적 (ultTimer로 관리)
+    this.invincible=999;
     burst(this.x,this.y-40,this.color,24,true);
     showAnnounce('ULTIMATE!', this.color);
   }
@@ -1039,7 +1078,44 @@ class Mantis {
         }
       }
     }
-    if(this.stateTimer<=0&&(this.state==='weak'||this.state==='strong'||this.state==='special'||this.state==='hurt')){ this.state='idle';this.hitbox=null; }
+    // ── 벌 갈고리 업데이트 ──
+    if(this.charType==='bee'&&this.hookState){
+      if(this.hookState==='flying'){
+        this.hookTimer+=dt;
+        this.hookX+=this.hookVx*dt;
+        this.hookY+=this.hookVy*dt;
+        // 화면 밖 or 1.5초 지나면 해제
+        if(this.hookTimer>1.5||this.hookX<0||this.hookX>1060){
+          this.hookState=null; return;
+        }
+        // 상대에게 닿으면 hooked
+        if(opp.hp>0){
+          const dx=Math.abs(this.hookX-opp.x), dy=Math.abs(this.hookY-(opp.y-40));
+          if(dx<30&&dy<40){
+            this.hookState='hooked';
+            this.hookTimer=0; this.hookDotTimer=0;
+            spark(opp.x,opp.y-40,0,this.color);
+          }
+        }
+      } else if(this.hookState==='hooked'){
+        this.hookTimer+=dt;
+        // 갈고리 위치는 상대에 고정
+        this.hookX=opp.x; this.hookY=opp.y-40;
+        // 도트딜: 0.25초마다 1 데미지 (초당 4)
+        this.hookDotTimer+=dt;
+        if(this.hookDotTimer>=0.25&&opp.hp>0&&opp.invincible<=0){
+          const dmg=opp.blocking?0:1;
+          opp.hp=Math.max(0,opp.hp-dmg);
+          this.hookDotTimer=0;
+          spark(opp.x,opp.y-40,0,this.color);
+        }
+        // 7초 후 자동 해제
+        if(this.hookTimer>=7){
+          this.hookState=null;
+          this.ultCooldown=20;
+        }
+      }
+    }
     if(this.hitstun<=0&&this.state==='hurt') this.state='idle';
     // 활공: 벌 캐릭터가 공중에서 ↓ 누르면 중력 대폭 감소
     const isGliding = this.charType==='bee' && !this.onGround && this.gliding;
@@ -1071,6 +1147,30 @@ class Mantis {
   }
   draw(){
     if(this.hp<=0&&this.state!=='dead') this.state='dead';
+    // 갈고리 줄 그리기
+    if(this.hookState){
+      ctx.save();
+      // 줄
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y-40);
+      ctx.lineTo(this.hookX, this.hookY);
+      ctx.strokeStyle=this.color+'cc';ctx.lineWidth=2;ctx.setLineDash([6,4]);
+      ctx.shadowColor=this.color;ctx.shadowBlur=6;
+      ctx.stroke();ctx.setLineDash([]);
+      // 갈고리 머리
+      ctx.beginPath();ctx.arc(this.hookX,this.hookY,6,0,Math.PI*2);
+      ctx.fillStyle=this.hookState==='hooked'?'#fff':this.color;
+      ctx.shadowBlur=this.hookState==='hooked'?12:4;
+      ctx.fill();
+      // hooked 상태: 남은 시간 표시
+      if(this.hookState==='hooked'){
+        const remain=Math.ceil(7-this.hookTimer);
+        ctx.globalAlpha=0.8;ctx.fillStyle='#fff';
+        ctx.font='bold 11px Share Tech Mono';ctx.textAlign='center';
+        ctx.fillText(remain+'s',this.hookX,this.hookY-12);
+      }
+      ctx.restore();
+    }
     const drawState=this.ultActive?'special':this.state;
     if(this.charType==='bee'){
       drawBee(this.x,this.y,this.facing,this.color,drawState,this.frame,this.hp,this.blocking,this.ultActive);
@@ -1079,7 +1179,7 @@ class Mantis {
     }
   }
   getState(){
-    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown,charType:this.charType};
+    return {x:this.x,y:this.y,vx:this.vx,vy:this.vy,hp:this.hp,facing:this.facing,state:this.state,stateTimer:this.stateTimer,hitstun:this.hitstun,invincible:this.invincible,blocking:this.blocking,hitbox:this.hitbox,specialCooldown:this.specialCooldown,ultActive:this.ultActive,ultTimer:this.ultTimer,ultCooldown:this.ultCooldown,charType:this.charType,hookState:this.hookState,hookX:this.hookX,hookY:this.hookY,hookTimer:this.hookTimer};
   }
   applyState(s){
     this.x=s.x;this.y=s.y;this.vx=s.vx;this.vy=s.vy;this.hp=s.hp;
@@ -1088,6 +1188,7 @@ class Mantis {
     this.hitbox=s.hitbox;this.specialCooldown=s.specialCooldown||0;
     this.ultActive=s.ultActive||false;this.ultTimer=s.ultTimer||0;this.ultCooldown=s.ultCooldown||0;
     if(s.charType) this.charType=s.charType;
+    this.hookState=s.hookState||null;this.hookX=s.hookX||0;this.hookY=s.hookY||0;this.hookTimer=s.hookTimer||0;
   }
 }
 
@@ -1195,7 +1296,7 @@ function loop(ts){
           if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
           else p1.attack('special');
         }
-        if(jp['KeyR']) p1.ultimate();
+        if(jp['KeyR']) p1.ultimate(p2);
         if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
         p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
       }
@@ -1237,7 +1338,7 @@ function loop(ts){
             if(p1.charType==='bee'){ if(p1.specialCooldown<=0){ fireStinger('p1',p1.x,p1.y-40,p1.facing,p1.color); p1.specialCooldown=1.2; } }
             else p1.attack('special');
           }
-          if(jp['KeyR']) p1.ultimate();
+          if(jp['KeyR']) p1.ultimate(p2);
           if(jp['ArrowDown']&&p1.charType==='bee'&&!p1.onGround) p1.gliding=!p1.gliding;
           p1.blocking=!!(keys['ArrowDown']||keys['KeyF']);
         }
@@ -1258,7 +1359,7 @@ function loop(ts){
             p2._oppDHeld=true;
           }
           if(!opponentKeys['KeyD']) p2._oppDHeld=false;
-          if(opponentKeys['KeyR']&&!p2._oppRHeld){p2.ultimate();p2._oppRHeld=true;}
+          if(opponentKeys['KeyR']&&!p2._oppRHeld){p2.ultimate(p1);p2._oppRHeld=true;}
           if(!opponentKeys['KeyR']) p2._oppRHeld=false;
           if(opponentKeys['ArrowDown']&&!p2._oppDownHeld&&p2.charType==='bee'&&!p2.onGround) p2.gliding=!p2.gliding;
           p2._oppDownHeld=!!opponentKeys['ArrowDown'];
